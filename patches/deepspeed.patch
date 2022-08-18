@@ -1,0 +1,31 @@
+From 0394e2e172398f0ac27bfca9e6bad259dd7d8ef8 Mon Sep 17 00:00:00 2001
+From: hgt312 <hgt312@foxmail.com>
+Date: Tue, 16 Aug 2022 00:12:08 +0800
+Subject: [PATCH] init
+
+---
+ deepspeed/runtime/zero/partitioned_param_coordinator.py | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/deepspeed/runtime/zero/partitioned_param_coordinator.py b/deepspeed/runtime/zero/partitioned_param_coordinator.py
+index 1dcff3f1..dd9c350b 100644
+--- a/deepspeed/runtime/zero/partitioned_param_coordinator.py
++++ b/deepspeed/runtime/zero/partitioned_param_coordinator.py
+@@ -189,10 +189,10 @@ class PartitionedParameterCoordinator:
+         if not self.is_complete_trace():  # not self.trace_complete:
+             # Make sure that recorded parameter and submodule orders are
+             # identical across ranks
+-            assert_ints_same_as_other_ranks([m.id for m in self.__submodule_order])
+-            assert_ints_same_as_other_ranks([p.param.ds_id for p in self.__param_order])
+-            assert_ints_same_as_other_ranks(
+-                [p.step_id_last_used_at for p in self.__param_order])
++            # assert_ints_same_as_other_ranks([m.id for m in self.__submodule_order])
++            # assert_ints_same_as_other_ranks([p.param.ds_id for p in self.__param_order])
++            # assert_ints_same_as_other_ranks(
++            #     [p.step_id_last_used_at for p in self.__param_order])
+
+             if self.is_record_trace():
+                 # Successfully recorded a trace
+--
+2.28.0
+
