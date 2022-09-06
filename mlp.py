@@ -1,5 +1,4 @@
 import argparse
-import contextlib
 import os
 import json
 
@@ -15,7 +14,7 @@ import torch_xla.core.xla_env_vars as xenv
 import torch_xla.utils.utils as xu
 import torch_xla.debug.metrics as metrics
 
-import xla_backend
+import xla_backend, xla_overrides
 
 ####################  setup xla dist config  ####################
 rank = int(os.environ["RANK"])
@@ -44,101 +43,6 @@ os.environ[xenv.SERVICE_ADDRESS] = "localhost:{}".format(49499)
 device = xm.xla_device()
 xm.set_replication(device, [device])
 
-# os.environ["XLA_IR_DEBUG"] = "1"
-# os.environ["XLA_SAVE_TENSORS_FILE"] = "mlp_xla_log.txt"
-
-####################  deepspeed overide  ####################
-def deepspeed_overrides():
-    print("deepspeed_overrides")
-
-    # override `torch.Tensor.type`
-    old_tensor_type_func = torch.Tensor.type
-    def my_tensor_type_func(self, dtype=None, non_blocking=False, **kwargs):
-        if self.device.type == "xla" and dtype is None:
-            type_map = {
-                "torch.float32": "torch.cuda.FloatTensor",
-                "torch.float16": "torch.cuda.HalfTensor"
-            }
-            return type_map[str(self.dtype)]
-        return old_tensor_type_func(self, dtype, non_blocking, **kwargs)
-    torch.Tensor.type = my_tensor_type_func
-
-    # DeepSpeed hard coded torch.cuda.synchronize in their timer:
-    # https://github.com/microsoft/DeepSpeed/blob/32e85eda58c560e5d5a596f71fce3682ac2ef80a/deepspeed/utils/timer.py#L141
-    torch.cuda.synchronize = dist.barrier
-
-    # Set torch.cuda.set_device to no-op
-    torch.cuda.set_device = lambda x: None
-    torch.cuda.current_device = lambda: "xla"
-    torch.cuda.reset_peak_memory_stats = lambda: None
-
-    class DummyEvent(object):
-        def __init__(self, enable_timing=False, blocking=False, interprocess=False):
-            pass
-        def record(self, stream=None):
-            pass
-        def query(self):
-            return True
-
-    # The cuda.Event objects are never actually used in Deepspeed.
-    torch.cuda.Event = DummyEvent
-
-    # We treat cuda stream as no-op.
-    class DummyStream(object):
-        def __init__(self):
-            pass
-        def synchronize(self):
-            dist.barrier()
-        def wait_stream(self, stream):
-            dist.barrier()
-    torch.cuda.Stream = DummyStream
-    @contextlib.contextmanager
-    def dummy_ctx(_): yield
-    torch.cuda.stream = dummy_ctx
-    torch.cuda.current_stream = lambda: DummyStream()
-    torch.cuda.default_stream = lambda: DummyStream()
-
-    old_record_stream = torch.Tensor.record_stream
-    def my_record_stream(self, stream):
-        dist.barrier()
-    torch.Tensor.record_stream = my_record_stream
-
-    # cuda memory
-    torch.cuda.memory_allocated = lambda: 0
-    torch.cuda.max_memory_allocated = lambda: 0
-    delattr(torch.cuda, "memory_stats")
-
-    # typed tensors
-    torch.cuda.ByteTensor = lambda t: torch.ByteTensor(t).to(device="xla")
-    torch.cuda.FloatTensor = lambda t: torch.FloatTensor(t).to(device="xla")
-
-    # Currently xla device tensor cannot be moved to CPU. This need to be fixed in
-    # https://github.com/pytorch/pytorch/blob/8ad584823fd5f6ac356f87939ccd327062ca1c2f/c10/core/TensorImpl.h#L1455
-    torch.Tensor.cpu = lambda self: self
-
-    # To us, cuda device means xla device.
-    torch.Tensor.cuda = lambda self, device=None, non_blocking=False: self.to(device="xla")
-    orig_torch_device = torch.device
-    def my_device(*args):
-        if len(args) == 1 and isinstance(args[0], str):
-            if args[0].startswith("cuda"):
-                return orig_torch_device("xla")
-        elif len(args) == 2 and isinstance(args[0], str) and args[0] == "cuda" and isinstance(args[1], int):
-            idx = args[1]
-            return orig_torch_device("xla")
-        return orig_torch_device(*args)
-    torch.device = my_device
-
-    # merge some small graphs
-    # from deepspeed.runtime.zero.stage3 import FP16_DeepSpeedZeroOptimizer_Stage3
-    # origin_defragment_func = FP16_DeepSpeedZeroOptimizer_Stage3.defragment
-    # def new_defragment(tensors):
-    #     xm.unlazy(tensors)
-    #     return origin_defragment_func(tensors)
-    # FP16_DeepSpeedZeroOptimizer_Stage3.defragment = new_defragment
-
-deepspeed_overrides()
-import deepspeed
 
 ####################  model  ####################
 class SimpleModel(nn.Module):
@@ -155,6 +59,10 @@ class SimpleModel(nn.Module):
         return self.cross_entropy_loss(hidden, y)
 
 ####################  script  ####################
+xla_overrides.pytorch_overrides()
+import deepspeed
+xla_overrides.deepspeed_overrides()
+
 dist.init_process_group("xla", rank=rank, world_size=world_size)
 
 def create_config_from_dict(tmpdir, config_dict):
@@ -226,7 +134,7 @@ model, _, _, _ = deepspeed.initialize(args=args,
                                       model=model,
                                       model_parameters=model.parameters())
 xm.mark_step()
-# print("INIT ENGINE!!!")
+print("INIT ENGINE!!!")
 
 def print_params(tag, model):
     if torch.distributed.get_rank() == 0:
@@ -244,10 +152,10 @@ for n, batch in enumerate(data_loader):
     loss = model(x, y)
     model.backward(loss)
     xm.mark_step()
-    # print("FWD+BWD!!!")
+    print("FWD+BWD!!!")
     model.step()
     xm.mark_step()
-    # print("MODEL STEP!!!")
+    print("MODEL STEP!!!")
     if torch.distributed.get_rank() == 0:
         print("LOSS:", loss.item())
         # print(metrics.metrics_report())

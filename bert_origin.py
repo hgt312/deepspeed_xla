@@ -108,7 +108,8 @@ class ConvertNLPContext:
 with ConvertNLPContext():
     config = transformers.AutoConfig.from_pretrained("bert-base-uncased")
     config.use_cache = False  # Disable model cache to avoid unnecessary model outputs.
-    config.num_hidden_layers = 1
+    config.vocab_size = 32032
+    # config.num_hidden_layers = 1
     model = transformers.BertForMaskedLM(config)
 
     input_shape = [batch_size, seq_length]
@@ -158,7 +159,7 @@ trainloader, testloader = load_wikitext2(batch_size)
 for epoch in range(n_epoch):
     n_iter = 1
     for batch in trainloader:
-        if n_iter == 6:
+        if n_iter == 11:
             break
 
         inputs, labels = batch["input_ids"], batch["labels"]
