@@ -84,6 +84,22 @@ def pytorch_overrides():
 
     torch.Tensor.data_ptr = lambda self: 0
 
+    original_narrow = torch.narrow
+    def mynarrow(self, axis, start, size):
+        if self.size(axis) == size and start == 0:
+            return self
+        return original_narrow(self, axis, start, size)
+    torch.Tensor.narrow = mynarrow
+    torch.narrow = mynarrow
+
+    original_view = torch.Tensor.view
+    def myview(self, *shape):
+        ret = original_view(self, *shape)
+        if ret.size() == self.size():
+            return self
+        return ret
+    torch.Tensor.view = myview
+
 
 def deepspeed_overrides():
     # merge some small graphs
